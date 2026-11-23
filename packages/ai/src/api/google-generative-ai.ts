@@ -28,7 +28,7 @@ import { type ClientIdentity, getIdentityHeaders } from "../utils/identity.ts";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.ts";
 import { getSystemMessageText } from "../utils/text.ts";
 import { collapseSystemMessages, getCurrentTools, getInitialSystemMessage } from "../utils/transcript.ts";
-import type { GoogleApiThinkingLevel, ResolvedGoogleThinkingLevel } from "./google-shared.ts";
+import type { GoogleApiThinkingLevel } from "./google-shared.ts";
 import {
 	convertMessages,
 	convertTools,
@@ -333,7 +333,11 @@ export const streamSimple: StreamFunction<"google-generative-ai", SimpleStreamOp
 		...base,
 		thinking: {
 			enabled: true,
-			budgetTokens: getGoogleBudget(model, resolvedLevel, options.thinkingBudgets),
+			budgetTokens: getGoogleBudget(
+				model,
+				resolvedLevel === "xhigh" ? "high" : resolvedLevel,
+				options.thinkingBudgets,
+			),
 		},
 	} satisfies GoogleOptions);
 };
@@ -347,7 +351,7 @@ function createClient(
 ): GoogleGenAI {
 	// Always pass fetch: without one, @google/genai adds a per-request dispatcher that disables
 	// undici's header and body timeouts, bypassing the idle timeouts of the global dispatcher.
-	const httpOptions: HttpOptions = { fetch: fetch ?? globalThis.fetch };
+	const httpOptions: HttpOptions = { apiVersion: "v1beta", fetch: fetch ?? globalThis.fetch };
 	if (model.baseUrl) {
 		httpOptions.baseUrl = model.baseUrl;
 		httpOptions.apiVersion = ""; // baseUrl already includes version path, don't append
@@ -427,7 +431,7 @@ function buildParams(
 
 function getGoogleBudget(
 	model: Model<"google-generative-ai">,
-	level: ResolvedGoogleThinkingLevel,
+	level: keyof ThinkingBudgets,
 	customBudgets?: ThinkingBudgets,
 ): number {
 	if (customBudgets?.[level] !== undefined) {
@@ -435,7 +439,7 @@ function getGoogleBudget(
 	}
 
 	if (model.id.includes("2.5-pro")) {
-		const budgets: Record<ResolvedGoogleThinkingLevel, number> = {
+		const budgets: Record<keyof ThinkingBudgets, number> = {
 			minimal: 128,
 			low: 2048,
 			medium: 8192,
@@ -445,7 +449,7 @@ function getGoogleBudget(
 	}
 
 	if (model.id.includes("2.5-flash-lite")) {
-		const budgets: Record<ResolvedGoogleThinkingLevel, number> = {
+		const budgets: Record<keyof ThinkingBudgets, number> = {
 			minimal: 512,
 			low: 2048,
 			medium: 8192,
@@ -455,7 +459,7 @@ function getGoogleBudget(
 	}
 
 	if (model.id.includes("2.5-flash")) {
-		const budgets: Record<ResolvedGoogleThinkingLevel, number> = {
+		const budgets: Record<keyof ThinkingBudgets, number> = {
 			minimal: 128,
 			low: 2048,
 			medium: 8192,

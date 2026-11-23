@@ -1,9 +1,16 @@
 import type { GenerateContentParameters } from "@google/genai";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { streamSimple as streamSimpleGoogle } from "../src/api/google-generative-ai.ts";
 import { resolveGoogleThinkingLevel } from "../src/api/google-shared.ts";
 import { streamSimple as streamSimpleVertex } from "../src/api/google-vertex.ts";
-import type { Model, ThinkingBudgets, ThinkingLevel, ThinkingLevelMap } from "../src/types.ts";
+import type {
+	FetchFunction,
+	Model,
+	SimpleStreamOptions,
+	ThinkingBudgets,
+	ThinkingLevel,
+	ThinkingLevelMap,
+} from "../src/types.ts";
 import { normalizeContext } from "../src/utils/transcript.ts";
 
 const context = normalizeContext({
@@ -87,11 +94,15 @@ async function captureVertexPayload(
 const googleAdapters = [
 	{
 		name: "Google Generative AI",
+		streamSimple: (id: string, thinkingLevelMap: ThinkingLevelMap, options: SimpleStreamOptions) =>
+			streamSimpleGoogle(googleModel(id, thinkingLevelMap), context, options),
 		capture: (id: string, thinkingLevelMap: ThinkingLevelMap, reasoning?: ThinkingLevel) =>
 			captureGooglePayload(googleModel(id, thinkingLevelMap), reasoning),
 	},
 	{
 		name: "Google Vertex",
+		streamSimple: (id: string, thinkingLevelMap: ThinkingLevelMap, options: SimpleStreamOptions) =>
+			streamSimpleVertex(vertexModel(id, thinkingLevelMap), context, options),
 		capture: (id: string, thinkingLevelMap: ThinkingLevelMap, reasoning?: ThinkingLevel) =>
 			captureVertexPayload(vertexModel(id, thinkingLevelMap), reasoning),
 	},
@@ -133,6 +144,63 @@ describe("Google thinking level maps", () => {
 		expect(() => resolveGoogleThinkingLevel(googleModel("gemini-3.7-flash", {}), "max")).toThrow(
 			"Unsupported Google thinking level mapping for test-google/gemini-3.7-flash: max -> undefined",
 		);
+		expect(() => resolveGoogleThinkingLevel(googleModel("gemini-3.7-flash", {}), "xhigh")).toThrow(
+			"Unsupported Google thinking level mapping for test-google/gemini-3.7-flash: xhigh -> undefined",
+		);
+	});
+
+	// Regression test for https://github.com/earendil-works/pi/issues/12184 (also affects Neon, #12391).
+	describe.each(googleAdapters)("$name native XHIGH", ({ streamSimple }) => {
+		it.each([
+			{ id: "gemini-4-neon", mapped: "xhigh" },
+			{ id: "gemini-4-neon", mapped: "XHIGH" },
+			{ id: "gemini-4-hydrogen", mapped: "xhigh" },
+			{ id: "gemini-4-hydrogen", mapped: "XHIGH" },
+		])("serializes $id with xhigh mapped to $mapped", async ({ id, mapped }) => {
+			const thinkingLevelMap: ThinkingLevelMap = {
+				off: null,
+				minimal: null,
+				low: "low",
+				medium: "medium",
+				high: "high",
+				xhigh: mapped,
+				max: null,
+			};
+			const fetch = vi.fn<FetchFunction>(
+				async () =>
+					new Response(
+						`data: ${JSON.stringify({ candidates: [{ content: { role: "model", parts: [{ text: "Hello" }] }, finishReason: "STOP" }] })}\n\n`,
+						{ headers: { "content-type": "text/event-stream" } },
+					),
+			);
+			const result = await streamSimple(id, thinkingLevelMap, {
+				apiKey: "test",
+				reasoning: "xhigh",
+				fetch,
+			}).result();
+
+			expect(result.stopReason).toBe("stop");
+			expect(fetch).toHaveBeenCalledTimes(1);
+			expect(JSON.parse(String(fetch.mock.calls[0][1]?.body))).toMatchObject({
+				generationConfig: { thinkingConfig: { includeThoughts: true, thinkingLevel: "XHIGH" } },
+			});
+		});
+	});
+
+	// #12184: upgrading the SDK must not move preview models or aliases to the v1 default.
+	it("keeps the Gemini beta endpoint when a model does not override the base URL", async () => {
+		const model = { ...googleModel("gemini-flash-latest", {}), baseUrl: "" };
+		const fetch = vi.fn<FetchFunction>(
+			async () =>
+				new Response(`data: ${JSON.stringify({ candidates: [{ finishReason: "STOP" }] })}\n\n`, {
+					headers: { "content-type": "text/event-stream" },
+				}),
+		);
+		const result = await streamSimpleGoogle(model, context, { apiKey: "test", reasoning: "high", fetch }).result();
+
+		expect(result.stopReason).toBe("stop");
+		expect(fetch).toHaveBeenCalledTimes(1);
+		expect(String(fetch.mock.calls[0][0])).toContain("https://generativelanguage.googleapis.com/v1beta/");
 	});
 
 	// Regression test for https://github.com/earendil-works/pi/issues/9455

@@ -25,7 +25,18 @@ function createModel<TApi extends Api>(api: TApi): Model<TApi> {
 	};
 }
 
-describe("Google CONTINUATION finish reason", () => {
+describe("Google finish reasons", () => {
+	// #12184: the SDK upgrade for XHIGH also adds these terminal errors.
+	it.each([
+		FinishReason.MISSING_THOUGHT_SIGNATURE,
+		FinishReason.MALFORMED_RESPONSE,
+		FinishReason.ESCALATION,
+		FinishReason.PUP_LIMITED_DISABLED,
+		FinishReason.MODEL_ARMOR,
+	])("maps %s to error", (reason) => {
+		expect(mapStopReason(reason)).toBe("error");
+	});
+
 	// #12097: @google/genai 2.32.0, needed for httpOptions.fetch, adds FinishReason.CONTINUATION.
 	it("maps CONTINUATION to length, like MAX_TOKENS", () => {
 		expect(mapStopReason(FinishReason.CONTINUATION)).toBe("length");
